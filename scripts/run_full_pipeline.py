@@ -1,6 +1,5 @@
 """
-Patent Data Pipeline – Full Local Processing
-Reads TSV files from data/ folder, builds SQLite DB, runs queries, exports reports.
+Patent Data Pipeline – Full Local Processing with Progress Bars
 """
 
 import pandas as pd
@@ -9,11 +8,12 @@ import zipfile
 import json
 import os
 from pathlib import Path
+from tqdm import tqdm
 
 # ============================================================
 # CONFIGURATION
 # ============================================================
-DATA_DIR = Path("C:\\dev\\patent_pipeline\\data")
+DATA_DIR = Path("C:\dev\patent_pipeline\data")
 DB_PATH = Path("output/patent_pipeline.db")
 CHUNK_SIZE = 50000
 
@@ -21,8 +21,20 @@ CHUNK_SIZE = 50000
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 # ============================================================
-# HELPER: Read a zipped TSV in chunks
+# HELPER: Count rows in a zipped TSV (for progress bar)
 # ============================================================
+def count_tsv_rows(zip_path):
+    """Approximate row count (excluding header). Returns None if not possible."""
+    try:
+        with zipfile.ZipFile(zip_path, 'r') as z:
+            tsv_name = z.namelist()[0]
+            with z.open(tsv_name) as f:
+                # Read first 10 chunks to estimate? Simpler: count lines.
+                # But for large files, this can be slow. We'll skip and just use tqdm with unknown total.
+                return None
+    except:
+        return None
+
 def read_tsv_in_chunks(zip_path, columns=None, chunksize=CHUNK_SIZE):
     """Generator that yields chunks of a zipped TSV file."""
     with zipfile.ZipFile(zip_path, 'r') as z:
@@ -36,134 +48,189 @@ def read_tsv_in_chunks(zip_path, columns=None, chunksize=CHUNK_SIZE):
 # 1. BUILD PATENTS TABLE
 # ============================================================
 def build_patents(conn):
-    print("Building patents table...")
-    patents_data = []
+    print("\n📄 Building patents table...")
     patent_abstracts = {}
 
+    # Load abstracts
     abstract_path = DATA_DIR / "g_patent_abstract.tsv.zip"
     if abstract_path.exists():
-        for chunk in read_tsv_in_chunks(abstract_path, columns=['patent_id', 'patent_abstract']):
-            for _, row in chunk.iterrows():
-                patent_abstracts[row['patent_id']] = row['patent_abstract']
+        print("  Loading abstracts...")
+        # First, count approximate rows for progress (optional)
+        with zipfile.ZipFile(abstract_path, 'r') as z:
+            tsv_name = z.namelist()[0]
+            with z.open(tsv_name) as f:
+                total_abstracts = sum(1 for _ in f) - 1  # minus header
+        with tqdm(total=total_abstracts, desc="  Reading abstracts", unit="rows") as pbar:
+            for chunk in read_tsv_in_chunks(abstract_path, columns=['patent_id', 'patent_abstract']):
+                for _, row in chunk.iterrows():
+                    patent_abstracts[row['patent_id']] = row['patent_abstract']
+                pbar.update(len(chunk))
     else:
-        print("Warning: g_patent_abstract.tsv.zip not found; abstracts will be empty.")
+        print("  Warning: g_patent_abstract.tsv.zip not found; abstracts will be empty.")
 
+    # Process patents
     patent_path = DATA_DIR / "g_patent.tsv.zip"
     if not patent_path.exists():
         raise FileNotFoundError("g_patent.tsv.zip not found in data/ folder")
 
-    for chunk in read_tsv_in_chunks(patent_path, columns=['patent_id', 'patent_title', 'patent_date']):
-        chunk = chunk.rename(columns={'patent_date': 'filing_date'})
-        chunk['year'] = pd.to_datetime(chunk['filing_date'], errors='coerce').dt.year
-        chunk['abstract'] = chunk['patent_id'].map(patent_abstracts).fillna("No abstract")
-        chunk.to_sql('patents', conn, if_exists='append', index=False)
-        print(f"  Inserted {len(chunk)} patents")
+    # Count rows for progress
+    with zipfile.ZipFile(patent_path, 'r') as z:
+        tsv_name = z.namelist()[0]
+        with z.open(tsv_name) as f:
+            total_patents = sum(1 for _ in f) - 1
+
+    with tqdm(total=total_patents, desc="  Processing patents", unit="rows") as pbar:
+        for chunk in read_tsv_in_chunks(patent_path, columns=['patent_id', 'patent_title', 'patent_date']):
+            chunk = chunk.rename(columns={'patent_date': 'filing_date'})
+            chunk['year'] = pd.to_datetime(chunk['filing_date'], errors='coerce').dt.year
+            chunk['abstract'] = chunk['patent_id'].map(patent_abstracts).fillna("No abstract")
+            chunk.to_sql('patents', conn, if_exists='append', index=False)
+            pbar.update(len(chunk))
 
     conn.execute("CREATE INDEX IF NOT EXISTS idx_patents_year ON patents(year);")
-    print("Patents table done.\n")
+    print("  ✅ Patents table done.\n")
 
 # ============================================================
 # 2. BUILD INVENTORS TABLE
 # ============================================================
 def build_inventors(conn):
-    print("Building inventors table...")
+    print("👥 Building inventors table...")
     loc_map = {}
     loc_path = DATA_DIR / "g_location_disambiguated.tsv.zip"
     if loc_path.exists():
-        for chunk in read_tsv_in_chunks(loc_path, columns=['location_id', 'disambig_country']):
-            for _, row in chunk.iterrows():
-                loc_map[row['location_id']] = row['disambig_country']
+        print("  Loading location map...")
+        with zipfile.ZipFile(loc_path, 'r') as z:
+            tsv_name = z.namelist()[0]
+            with z.open(tsv_name) as f:
+                total_locs = sum(1 for _ in f) - 1
+        with tqdm(total=total_locs, desc="  Reading locations", unit="rows") as pbar:
+            for chunk in read_tsv_in_chunks(loc_path, columns=['location_id', 'disambig_country']):
+                for _, row in chunk.iterrows():
+                    loc_map[row['location_id']] = row['disambig_country']
+                pbar.update(len(chunk))
     else:
-        print("Warning: location file missing; countries will be Unknown")
+        print("  Warning: location file missing; countries will be Unknown")
 
     inv_path = DATA_DIR / "g_inventor_disambiguated.tsv.zip"
     if not inv_path.exists():
         raise FileNotFoundError("g_inventor_disambiguated.tsv.zip not found")
 
-    for chunk in read_tsv_in_chunks(inv_path, columns=['inventor_id', 'inventor_first_name', 'inventor_last_name', 'location_id']):
-        chunk['name'] = chunk['inventor_first_name'].fillna('') + ' ' + chunk['inventor_last_name'].fillna('')
-        chunk['name'] = chunk['name'].str.strip()
-        chunk.loc[chunk['name'] == '', 'name'] = 'Unknown'
-        chunk['country'] = chunk['location_id'].map(loc_map).fillna('Unknown')
-        df_inv = chunk[['inventor_id', 'name', 'country']].drop_duplicates('inventor_id')
-        df_inv.to_sql('inventors', conn, if_exists='append', index=False)
-        print(f"  Inserted {len(df_inv)} inventors")
+    # Count rows
+    with zipfile.ZipFile(inv_path, 'r') as z:
+        tsv_name = z.namelist()[0]
+        with z.open(tsv_name) as f:
+            total_inventors = sum(1 for _ in f) - 1
+
+    with tqdm(total=total_inventors, desc="  Processing inventors", unit="rows") as pbar:
+        for chunk in read_tsv_in_chunks(inv_path, columns=['inventor_id', 'inventor_first_name', 'inventor_last_name', 'location_id']):
+            chunk['name'] = chunk['inventor_first_name'].fillna('') + ' ' + chunk['inventor_last_name'].fillna('')
+            chunk['name'] = chunk['name'].str.strip()
+            chunk.loc[chunk['name'] == '', 'name'] = 'Unknown'
+            chunk['country'] = chunk['location_id'].map(loc_map).fillna('Unknown')
+            df_inv = chunk[['inventor_id', 'name', 'country']].drop_duplicates('inventor_id')
+            df_inv.to_sql('inventors', conn, if_exists='append', index=False)
+            pbar.update(len(chunk))
 
     conn.execute("CREATE INDEX IF NOT EXISTS idx_inventors_id ON inventors(inventor_id);")
-    print("Inventors table done.\n")
+    print("  ✅ Inventors table done.\n")
 
 # ============================================================
 # 3. BUILD COMPANIES TABLE
 # ============================================================
 def build_companies(conn):
-    print("Building companies table...")
+    print("🏢 Building companies table...")
     loc_map = {}
     loc_path = DATA_DIR / "g_location_disambiguated.tsv.zip"
     if loc_path.exists():
-        for chunk in read_tsv_in_chunks(loc_path, columns=['location_id', 'disambig_country']):
-            for _, row in chunk.iterrows():
-                loc_map[row['location_id']] = row['disambig_country']
+        # Reload location map (could reuse from previous, but simpler to reload)
+        with zipfile.ZipFile(loc_path, 'r') as z:
+            tsv_name = z.namelist()[0]
+            with z.open(tsv_name) as f:
+                total_locs = sum(1 for _ in f) - 1
+        with tqdm(total=total_locs, desc="  Reading locations (companies)", unit="rows") as pbar:
+            for chunk in read_tsv_in_chunks(loc_path, columns=['location_id', 'disambig_country']):
+                for _, row in chunk.iterrows():
+                    loc_map[row['location_id']] = row['disambig_country']
+                pbar.update(len(chunk))
 
     assignee_path = DATA_DIR / "g_persistent_assignee.tsv.zip"
     if not assignee_path.exists():
         assignee_path = DATA_DIR / "g_assignee_disambiguated.tsv.zip"
         if not assignee_path.exists():
-            raise FileNotFoundError("No assignee file found (g_persistent_assignee or g_assignee_disambiguated)")
+            raise FileNotFoundError("No assignee file found")
 
-    for chunk in read_tsv_in_chunks(assignee_path, columns=['assignee_id', 'assignee_organization', 'location_id']):
-        chunk = chunk.rename(columns={'assignee_organization': 'name'})
-        chunk['country'] = chunk['location_id'].map(loc_map).fillna('Unknown')
-        df_comp = chunk[['assignee_id', 'name']].drop_duplicates('assignee_id')
-        df_comp = df_comp.rename(columns={'assignee_id': 'company_id'})
-        df_comp.to_sql('companies', conn, if_exists='append', index=False)
-        print(f"  Inserted {len(df_comp)} companies")
+    with zipfile.ZipFile(assignee_path, 'r') as z:
+        tsv_name = z.namelist()[0]
+        with z.open(tsv_name) as f:
+            total_assignees = sum(1 for _ in f) - 1
+
+    with tqdm(total=total_assignees, desc="  Processing companies", unit="rows") as pbar:
+        for chunk in read_tsv_in_chunks(assignee_path, columns=['assignee_id', 'assignee_organization', 'location_id']):
+            chunk = chunk.rename(columns={'assignee_organization': 'name'})
+            chunk['country'] = chunk['location_id'].map(loc_map).fillna('Unknown')
+            df_comp = chunk[['assignee_id', 'name']].drop_duplicates('assignee_id')
+            df_comp = df_comp.rename(columns={'assignee_id': 'company_id'})
+            df_comp.to_sql('companies', conn, if_exists='append', index=False)
+            pbar.update(len(chunk))
 
     conn.execute("CREATE INDEX IF NOT EXISTS idx_companies_id ON companies(company_id);")
-    print("Companies table done.\n")
+    print("  ✅ Companies table done.\n")
 
 # ============================================================
 # 4. BUILD PATENT-INVENTOR RELATION
 # ============================================================
 def build_patent_inventor(conn):
-    print("Building patent_inventor relationship...")
+    print("🔗 Building patent-inventor relationships...")
     rel_path = DATA_DIR / "g_inventor_not_disambiguated.tsv.zip"
     if not rel_path.exists():
         raise FileNotFoundError("g_inventor_not_disambiguated.tsv.zip not found")
 
-    for chunk in read_tsv_in_chunks(rel_path, columns=['patent_id', 'inventor_id']):
-        chunk = chunk.drop_duplicates()
-        chunk.to_sql('patent_inventor', conn, if_exists='append', index=False)
-        print(f"  Inserted {len(chunk)} patent-inventor links")
+    with zipfile.ZipFile(rel_path, 'r') as z:
+        tsv_name = z.namelist()[0]
+        with z.open(tsv_name) as f:
+            total_links = sum(1 for _ in f) - 1
+
+    with tqdm(total=total_links, desc="  Processing inventor links", unit="rows") as pbar:
+        for chunk in read_tsv_in_chunks(rel_path, columns=['patent_id', 'inventor_id']):
+            chunk = chunk.drop_duplicates()
+            chunk.to_sql('patent_inventor', conn, if_exists='append', index=False)
+            pbar.update(len(chunk))
 
     conn.execute("CREATE INDEX IF NOT EXISTS idx_pi_patent ON patent_inventor(patent_id);")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_pi_inventor ON patent_inventor(inventor_id);")
-    print("Patent-inventor table done.\n")
+    print("  ✅ Patent-inventor table done.\n")
 
 # ============================================================
 # 5. BUILD PATENT-COMPANY RELATION
 # ============================================================
 def build_patent_company(conn):
-    print("Building patent_company relationship...")
+    print("🔗 Building patent-company relationships...")
     rel_path = DATA_DIR / "g_assignee_not_disambiguated.tsv.zip"
     if not rel_path.exists():
         raise FileNotFoundError("g_assignee_not_disambiguated.tsv.zip not found")
 
-    for chunk in read_tsv_in_chunks(rel_path, columns=['patent_id', 'assignee_id']):
-        chunk = chunk.drop_duplicates()
-        chunk = chunk.rename(columns={'assignee_id': 'company_id'})
-        chunk.to_sql('patent_company', conn, if_exists='append', index=False)
-        print(f"  Inserted {len(chunk)} patent-company links")
+    with zipfile.ZipFile(rel_path, 'r') as z:
+        tsv_name = z.namelist()[0]
+        with z.open(tsv_name) as f:
+            total_links = sum(1 for _ in f) - 1
+
+    with tqdm(total=total_links, desc="  Processing company links", unit="rows") as pbar:
+        for chunk in read_tsv_in_chunks(rel_path, columns=['patent_id', 'assignee_id']):
+            chunk = chunk.drop_duplicates()
+            chunk = chunk.rename(columns={'assignee_id': 'company_id'})
+            chunk.to_sql('patent_company', conn, if_exists='append', index=False)
+            pbar.update(len(chunk))
 
     conn.execute("CREATE INDEX IF NOT EXISTS idx_pc_patent ON patent_company(patent_id);")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_pc_company ON patent_company(company_id);")
-    print("Patent-company table done.\n")
+    print("  ✅ Patent-company table done.\n")
 
 # ============================================================
 # 6. RUN REQUIRED SQL QUERIES
 # ============================================================
 def run_queries(conn):
     print("\n" + "="*60)
-    print("RUNNING REQUIRED SQL QUERIES")
+    print("📊 RUNNING REQUIRED SQL QUERIES")
     print("="*60)
 
     queries = {
@@ -241,27 +308,27 @@ def run_queries(conn):
     return results
 
 # ============================================================
-# 7. GENERATE REPORTS (CSV, JSON, clean CSVs)
+# 7. GENERATE REPORTS
 # ============================================================
 def generate_reports(conn, results):
     print("\n" + "="*60)
-    print("EXPORTING REPORTS")
+    print("💾 EXPORTING REPORTS")
     print("="*60)
 
-    # CSV reports (required at least two; we export three)
+    # CSV reports
     results["Q1_Top_Inventors"].to_csv("output/top_inventors.csv", index=False)
     results["Q2_Top_Companies"].to_csv("output/top_companies.csv", index=False)
     results["Q3_Top_Countries"].to_csv("output/country_trends.csv", index=False)
-    print("Exported: top_inventors.csv, top_companies.csv, country_trends.csv")
+    print("✅ Exported: top_inventors.csv, top_companies.csv, country_trends.csv")
 
-    # Clean CSVs (required by assignment)
+    # Clean CSVs
     clean_patents = pd.read_sql_query("SELECT * FROM patents", conn)
     clean_inventors = pd.read_sql_query("SELECT * FROM inventors", conn)
     clean_companies = pd.read_sql_query("SELECT * FROM companies", conn)
     clean_patents.to_csv("output/clean_patents.csv", index=False)
     clean_inventors.to_csv("output/clean_inventors.csv", index=False)
     clean_companies.to_csv("output/clean_companies.csv", index=False)
-    print("Exported clean CSVs: clean_patents.csv, clean_inventors.csv, clean_companies.csv")
+    print("✅ Exported clean CSVs: clean_patents.csv, clean_inventors.csv, clean_companies.csv")
 
     # JSON report
     total_patents = pd.read_sql_query("SELECT COUNT(*) as cnt FROM patents", conn).iloc[0]["cnt"]
@@ -278,53 +345,36 @@ def generate_reports(conn, results):
 
     with open("output/report.json", "w") as f:
         json.dump(json_report, f, indent=2)
-    print("Exported: report.json")
+    print("✅ Exported: report.json")
 
 # ============================================================
 # MAIN
 # ============================================================
 def main():
-    # Create fresh database
+    print("🚀 Starting Patent Data Pipeline")
+    print("="*60)
+
+    # Remove old database if exists
     if DB_PATH.exists():
         DB_PATH.unlink()
+        print("🗑️  Removed existing database.")
     conn = sqlite3.connect(DB_PATH)
 
-    # Create tables using schema.sql if exists, else hardcoded
+    # Create tables using schema.sql if exists
     schema_path = Path("sql/schema.sql")
     if schema_path.exists():
         with open(schema_path, "r") as f:
             conn.executescript(f.read())
-        print("Created tables from sql/schema.sql")
+        print("✅ Created tables from sql/schema.sql")
     else:
         conn.executescript("""
-            CREATE TABLE patents (
-                patent_id TEXT PRIMARY KEY,
-                title TEXT,
-                abstract TEXT,
-                filing_date TEXT,
-                year INTEGER
-            );
-            CREATE TABLE inventors (
-                inventor_id TEXT PRIMARY KEY,
-                name TEXT,
-                country TEXT
-            );
-            CREATE TABLE companies (
-                company_id TEXT PRIMARY KEY,
-                name TEXT
-            );
-            CREATE TABLE patent_inventor (
-                patent_id TEXT,
-                inventor_id TEXT,
-                PRIMARY KEY (patent_id, inventor_id)
-            );
-            CREATE TABLE patent_company (
-                patent_id TEXT,
-                company_id TEXT,
-                PRIMARY KEY (patent_id, company_id)
-            );
+            CREATE TABLE patents (patent_id TEXT PRIMARY KEY, title TEXT, abstract TEXT, filing_date TEXT, year INTEGER);
+            CREATE TABLE inventors (inventor_id TEXT PRIMARY KEY, name TEXT, country TEXT);
+            CREATE TABLE companies (company_id TEXT PRIMARY KEY, name TEXT);
+            CREATE TABLE patent_inventor (patent_id TEXT, inventor_id TEXT, PRIMARY KEY (patent_id, inventor_id));
+            CREATE TABLE patent_company (patent_id TEXT, company_id TEXT, PRIMARY KEY (patent_id, company_id));
         """)
-        print("Created tables using hardcoded schema (sql/schema.sql not found)")
+        print("✅ Created tables using hardcoded schema (sql/schema.sql not found)")
     conn.commit()
 
     # Build all tables
@@ -339,8 +389,8 @@ def main():
     generate_reports(conn, results)
 
     conn.close()
-    print("\n✅ Pipeline complete. Database saved to output/patent_pipeline.db")
-    print("   Clean CSVs, reports, and JSON are in output/ folder.")
+    print("\n🎉 Pipeline complete! Database saved to output/patent_pipeline.db")
+    print("   Clean CSVs, reports, and JSON are in output/ folder.\n")
 
 if __name__ == "__main__":
     main()
