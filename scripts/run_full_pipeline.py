@@ -48,7 +48,7 @@ def read_tsv_in_chunks(zip_path, columns=None, chunksize=CHUNK_SIZE):
 # 1. BUILD PATENTS TABLE
 # ============================================================
 def build_patents(conn):
-    print("\n📄 Building patents table...")
+    print("\n...Building patents table...")
     patent_abstracts = {}
 
     # Load abstracts
@@ -88,13 +88,13 @@ def build_patents(conn):
             pbar.update(len(chunk))
 
     conn.execute("CREATE INDEX IF NOT EXISTS idx_patents_year ON patents(year);")
-    print("  ✅ Patents table done.\n")
+    print("   Patents table done.\n")
 
 # ============================================================
 # 2. BUILD INVENTORS TABLE
 # ============================================================
 def build_inventors(conn):
-    print("👥 Building inventors table...")
+    print("...Building inventors table...")
     loc_map = {}
     loc_path = DATA_DIR / "g_location_disambiguated.tsv.zip"
     if loc_path.exists():
@@ -132,13 +132,13 @@ def build_inventors(conn):
             pbar.update(len(chunk))
 
     conn.execute("CREATE INDEX IF NOT EXISTS idx_inventors_id ON inventors(inventor_id);")
-    print("  ✅ Inventors table done.\n")
+    print("   Inventors table done.\n")
 
 # ============================================================
 # 3. BUILD COMPANIES TABLE
 # ============================================================
 def build_companies(conn):
-    print("🏢 Building companies table...")
+    print("...Building companies table...")
     loc_map = {}
     loc_path = DATA_DIR / "g_location_disambiguated.tsv.zip"
     if loc_path.exists():
@@ -174,13 +174,13 @@ def build_companies(conn):
             pbar.update(len(chunk))
 
     conn.execute("CREATE INDEX IF NOT EXISTS idx_companies_id ON companies(company_id);")
-    print("  ✅ Companies table done.\n")
+    print("   Companies table done.\n")
 
 # ============================================================
 # 4. BUILD PATENT-INVENTOR RELATION
 # ============================================================
 def build_patent_inventor(conn):
-    print("🔗 Building patent-inventor relationships...")
+    print("...Building patent-inventor relationships...")
     rel_path = DATA_DIR / "g_inventor_not_disambiguated.tsv.zip"
     if not rel_path.exists():
         raise FileNotFoundError("g_inventor_not_disambiguated.tsv.zip not found")
@@ -198,13 +198,13 @@ def build_patent_inventor(conn):
 
     conn.execute("CREATE INDEX IF NOT EXISTS idx_pi_patent ON patent_inventor(patent_id);")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_pi_inventor ON patent_inventor(inventor_id);")
-    print("  ✅ Patent-inventor table done.\n")
+    print("   Patent-inventor table done.\n")
 
 # ============================================================
 # 5. BUILD PATENT-COMPANY RELATION
 # ============================================================
 def build_patent_company(conn):
-    print("🔗 Building patent-company relationships...")
+    print("...Building patent-company relationships...")
     rel_path = DATA_DIR / "g_assignee_not_disambiguated.tsv.zip"
     if not rel_path.exists():
         raise FileNotFoundError("g_assignee_not_disambiguated.tsv.zip not found")
@@ -223,14 +223,14 @@ def build_patent_company(conn):
 
     conn.execute("CREATE INDEX IF NOT EXISTS idx_pc_patent ON patent_company(patent_id);")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_pc_company ON patent_company(company_id);")
-    print("  ✅ Patent-company table done.\n")
+    print("   Patent-company table done.\n")
 
 # ============================================================
 # 6. RUN REQUIRED SQL QUERIES
 # ============================================================
 def run_queries(conn):
     print("\n" + "="*60)
-    print("📊 RUNNING REQUIRED SQL QUERIES")
+    print("...RUNNING REQUIRED SQL QUERIES...")
     print("="*60)
 
     queries = {
@@ -312,14 +312,14 @@ def run_queries(conn):
 # ============================================================
 def generate_reports(conn, results):
     print("\n" + "="*60)
-    print("💾 EXPORTING REPORTS")
+    print("...EXPORTING REPORTS...")
     print("="*60)
 
     # CSV reports
     results["Q1_Top_Inventors"].to_csv("output/top_inventors.csv", index=False)
     results["Q2_Top_Companies"].to_csv("output/top_companies.csv", index=False)
     results["Q3_Top_Countries"].to_csv("output/country_trends.csv", index=False)
-    print("✅ Exported: top_inventors.csv, top_companies.csv, country_trends.csv")
+    print(" Exported: top_inventors.csv, top_companies.csv, country_trends.csv")
 
     # Clean CSVs
     clean_patents = pd.read_sql_query("SELECT * FROM patents", conn)
@@ -328,7 +328,7 @@ def generate_reports(conn, results):
     clean_patents.to_csv("output/clean_patents.csv", index=False)
     clean_inventors.to_csv("output/clean_inventors.csv", index=False)
     clean_companies.to_csv("output/clean_companies.csv", index=False)
-    print("✅ Exported clean CSVs: clean_patents.csv, clean_inventors.csv, clean_companies.csv")
+    print(" Exported clean CSVs: clean_patents.csv, clean_inventors.csv, clean_companies.csv")
 
     # JSON report
     total_patents = pd.read_sql_query("SELECT COUNT(*) as cnt FROM patents", conn).iloc[0]["cnt"]
@@ -345,19 +345,19 @@ def generate_reports(conn, results):
 
     with open("output/report.json", "w") as f:
         json.dump(json_report, f, indent=2)
-    print("✅ Exported: report.json")
+    print(" Exported: report.json")
 
 # ============================================================
 # MAIN
 # ============================================================
 def main():
-    print("🚀 Starting Patent Data Pipeline")
+    print("...Starting Patent Data Pipeline...")
     print("="*60)
 
     # Remove old database if exists
     if DB_PATH.exists():
         DB_PATH.unlink()
-        print("🗑️  Removed existing database.")
+        print("  Removed existing database.")
     conn = sqlite3.connect(DB_PATH)
 
     # Create tables using schema.sql if exists
@@ -365,7 +365,7 @@ def main():
     if schema_path.exists():
         with open(schema_path, "r") as f:
             conn.executescript(f.read())
-        print("✅ Created tables from sql/schema.sql")
+        print("   Created tables from sql/schema.sql")
     else:
         conn.executescript("""
             CREATE TABLE patents (patent_id TEXT PRIMARY KEY, title TEXT, abstract TEXT, filing_date TEXT, year INTEGER);
@@ -374,7 +374,7 @@ def main():
             CREATE TABLE patent_inventor (patent_id TEXT, inventor_id TEXT, PRIMARY KEY (patent_id, inventor_id));
             CREATE TABLE patent_company (patent_id TEXT, company_id TEXT, PRIMARY KEY (patent_id, company_id));
         """)
-        print("✅ Created tables using hardcoded schema (sql/schema.sql not found)")
+        print("   Created tables using hardcoded schema (sql/schema.sql not found)")
     conn.commit()
 
     # Build all tables
