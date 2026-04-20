@@ -13,7 +13,7 @@ from pathlib import Path
 # ============================================================
 # CONFIGURATION
 # ============================================================
-DATA_DIR = Path("data")
+DATA_DIR = Path("C:\\dev\\patent_pipeline\\data")
 DB_PATH = Path("output/patent_pipeline.db")
 CHUNK_SIZE = 50000
 
