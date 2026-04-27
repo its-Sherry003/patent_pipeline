@@ -5,5 +5,5 @@ data/*.zip
 data/*.pdf
 output/*.db
 .DS_Store
-output/clean_patents_sampled.csv
+output/clean_patents.csv
 output/clean_patents.json
