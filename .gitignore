@@ -6,4 +6,3 @@ data/*.pdf
 output/*.db
 .DS_Store
 output/clean_patents.json
-output/clean_patents.csv
