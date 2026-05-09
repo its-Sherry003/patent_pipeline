@@ -190,6 +190,39 @@ def load_csv(name, required_cols):
     except Exception as e:
         st.warning(f"Could not load {name}: {e}")
         return None
+    
+@st.cache_data(show_spinner=False)
+def load_patent_yearly_counts():
+    """
+    Reads only the 'year' column from clean_patents.csv in chunks,
+    aggregates patent counts per year, and returns a small DataFrame.
+    This avoids loading the entire CSV into memory.
+    """
+    path = data_path("clean_patents.csv")
+    if not os.path.exists(path):
+        return pd.DataFrame()
+
+    chunksize = 50000   # rows per chunk
+    yearly_counts = {}
+
+    # Read only the 'year' column, in chunks
+    for chunk in pd.read_csv(path, usecols=['year'], chunksize=chunksize, low_memory=False):
+        # Standardise column names (optional, but safe)
+        chunk.columns = [c.strip().lower().replace(" ", "_") for c in chunk.columns]
+        if 'year' in chunk.columns:
+            # Convert to integer (drop NaNs)
+            years = chunk['year'].dropna().astype(int)
+            # Count occurrences per year in this chunk
+            for y in years:
+                yearly_counts[y] = yearly_counts.get(y, 0) + 1
+
+    if not yearly_counts:
+        return pd.DataFrame()
+
+    # Convert to DataFrame and sort
+    df = pd.DataFrame(list(yearly_counts.items()), columns=['year', 'patents'])
+    df = df.sort_values('year').reset_index(drop=True)
+    return df
 
 @st.cache_data(show_spinner=False)
 def load_json(name):
@@ -201,13 +234,22 @@ def load_json(name):
 
 # ── Load data ─────────────────────────────────────────────────────────────────
 with st.spinner("Loading patent data…"):
-    patents   = load_csv("clean_patents.csv",   {"patent_id":["id"],"title":["patent_title"],"year":["grant_year","filing_year"],"filing_date":["date"]})
+    #patents   = load_csv("clean_patents.csv",   {"patent_id":["id"],"title":["patent_title"],"year":["grant_year","filing_year"],"filing_date":["date"]})
     inventors = load_csv("clean_inventors.csv", {"inventor_id":["id"],"name":["inventor_name","full_name"],"country":["inventor_country","country_code"]})
     companies = load_csv("clean_companies.csv", {"company_id":["id"],"name":["company_name","assignee","assignee_name"]})
     top_inv   = load_csv("top_inventors.csv",   {"name":["inventor_name","full_name"],"patents":["patent_count","count","num_patents"]})
     top_comp  = load_csv("top_companies.csv",   {"name":["company_name","assignee_name","assignee"],"patents":["patent_count","count","num_patents"]})
     countries = load_csv("country_trends.csv",  {"country":["country_code","inventor_country"],"patents":["patent_count","count","num_patents"],"year":["grant_year","filing_year"]})
     report    = load_json("report.json")
+
+# Convert 'patents' column to numeric (robust)
+for df in [top_inv, top_comp, countries]:
+    if df is not None and 'patents' in df.columns:
+        # Remove commas, spaces, and convert to numeric
+        df['patents'] = df['patents'].astype(str).str.replace(',', '').str.strip()
+        df['patents'] = pd.to_numeric(df['patents'], errors='coerce')
+        # Drop rows where conversion failed
+        df.dropna(subset=['patents'], inplace=True)
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -230,28 +272,7 @@ with st.sidebar:
     st.markdown("---")
 
     # Year filter
-    year_range = None
-    if patents is not None and "year" in patents.columns:
-        yrs = patents["year"].dropna().astype(int)
-        mn, mx = int(yrs.min()), int(yrs.max())
-        if mn < mx:
-            year_range = st.slider("Year range", mn, mx, (mn, mx))
 
-    st.markdown("---")
-    st.markdown("""
-    <div style='font-size:10px;color:#4a6a5a;line-height:1.8'>
-    <b style='color:#8aaa9a'>Data source</b><br>
-    USPTO PatentsView<br>
-    1976 – 2025
-    </div>
-    """, unsafe_allow_html=True)
-
-def filter_by_year(df):
-    if df is None or year_range is None or "year" not in df.columns:
-        return df
-    return df[(df["year"].astype(float) >= year_range[0]) & (df["year"].astype(float) <= year_range[1])]
-
-patents_f = filter_by_year(patents)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PAGE: OVERVIEW
@@ -268,9 +289,8 @@ if page == "📊 Overview":
 
     # ── Patents per year – area/line chart ──
     with col_l:
-        if patents_f is not None and "year" in patents_f.columns:
-            yr_counts = patents_f.groupby("year").size().reset_index(name="patents")
-            yr_counts["year"] = yr_counts["year"].astype(int)
+        yr_counts = load_patent_yearly_counts()
+        if not yr_counts.empty:
             fig = go.Figure()
             fig.add_trace(go.Scatter(
                 x=yr_counts["year"], y=yr_counts["patents"],
@@ -587,8 +607,8 @@ elif page == "📈 Trends Over Time":
     st.markdown("## 📈 Innovation Trends Over Time")
     st.caption("How global patent output has evolved from 1976 to 2025")
 
-    if patents_f is not None and "year" in patents_f.columns:
-        yr = patents_f.groupby("year").size().reset_index(name="patents")
+    yr = load_patent_yearly_counts()
+    if not yr.empty:
         yr["year"] = yr["year"].astype(int)
         yr = yr.sort_values("year")
         yr["cumulative"] = yr["patents"].cumsum()
