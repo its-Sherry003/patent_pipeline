@@ -4,5 +4,6 @@ __pycache__/
 data/*.zip
 data/*.pdf
 output/*.db
+output/*.csv
 .DS_Store
 output/clean_patents.json
