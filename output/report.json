@@ -22,28 +22,7 @@
       "patents": 2881
     }
   ],
-  "top_companies": [
-    {
-      "name": "Samsung Electronics Co., Ltd.",
-      "patents": 174536
-    },
-    {
-      "name": "International Business Machines Corporation",
-      "patents": 164083
-    },
-    {
-      "name": "Canon Kabushiki Kaisha",
-      "patents": 91331
-    },
-    {
-      "name": "Sony Corporation",
-      "patents": 62911
-    },
-    {
-      "name": "Fujitsu Limited",
-      "patents": 56343
-    }
-  ],
+  "top_companies": [],
   "top_countries": [
     {
       "country": "US",

@@ -7,3 +7,5 @@ output/*.db
 output/*.csv
 .DS_Store
 output/clean_patents.json
+output/clean_patents.csv
+output/c
